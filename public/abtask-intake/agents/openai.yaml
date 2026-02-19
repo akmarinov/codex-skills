@@ -1,0 +1,4 @@
+interface:
+  display_name: "ABTask Intake"
+  short_description: "Azure Boards intake + plan"
+  default_prompt: "Run /abtask intake and planning for an Azure Boards work item (ID or URL), including worktree setup, work item summary, repo reconnaissance, and approval-ready plan."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "ADO PR Publish Flow"
+  short_description: "Commit, sync with dev, and open Azure PR"
+  default_prompt: "Commit and push all current branch changes, check and resolve conflicts with latest origin/dev, then create an Azure DevOps PR to dev using branch naming users/andreym/{ticketNumber}-..., PR title format {ticket type} #{ticket number}: {name of story} with provided ticket numbers only, Fixes AB# links, and PR work-item links that include provided items plus parents for child items."
