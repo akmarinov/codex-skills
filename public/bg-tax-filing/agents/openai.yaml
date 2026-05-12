@@ -1,0 +1,4 @@
+interface:
+  display_name: "BG Tax Filing"
+  short_description: "Bulgarian NRA tax filing workflow"
+  default_prompt: "Help prepare a Bulgarian NRA annual personal income tax declaration from broker, crypto, rent, and dividend documents; verify current rules, extract data, classify appendices, and generate import-ready files."
