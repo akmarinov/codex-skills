@@ -1,0 +1,7 @@
+interface:
+  display_name: "iOS TestFlight Release Setup"
+  short_description: "Set up iOS signing and TestFlight CI"
+  default_prompt: "Use $ios-testflight-release-setup to create an iOS app repo, configure signing, set GitHub environment secrets, and verify a TestFlight upload."
+
+policy:
+  allow_implicit_invocation: true

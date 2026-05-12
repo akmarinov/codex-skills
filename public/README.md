@@ -48,6 +48,23 @@ Provides a comprehensive workflow for building iOS apps, launching them on simul
 
 ---
 
+### 🚢 iOS TestFlight Release Setup
+
+**Purpose**: Create an iOS app repo and wire signing, GitHub Actions, and TestFlight deployment.
+
+Provides an end-to-end release setup workflow for new iOS apps, including XcodeGen project settings, App Store Connect records, fastlane match, GitHub environment secrets, hosted macOS runners, self-hosted fallback guidance, and first TestFlight upload verification.
+
+**Key Features**:
+- Sets up app and match repositories with durable signing
+- Documents required GitHub production environment secrets
+- Provides hosted `macos-26` GitHub Actions deploy workflow
+- Captures match seeding and certificate-id troubleshooting
+- Verifies remote Actions upload and App Store Connect build state
+
+**Use When**: You need to create or harden an iOS app release pipeline through TestFlight.
+
+---
+
 ### 🧭 GH Issue Fix Flow
 
 **Purpose**: Resolve GitHub issues end-to-end using `gh`, local edits, builds/tests, and git push.
