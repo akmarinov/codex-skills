@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codemagic Watch"
+  short_description: "Monitor Codemagic builds from the terminal"
+  default_prompt: "Use $codemagic-watch to inspect or follow a Codemagic build from this workspace."
