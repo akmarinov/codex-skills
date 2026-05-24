@@ -10,6 +10,7 @@ Use this skill when the user wants a new iOS app repo shipped to TestFlight, not
 ## Operating Principles
 
 - Prefer a hosted GitHub runner with `macos-26` and `fastlane match` for durable CI signing.
+- Use self-hosted macOS runners when private-repo GitHub Actions minutes are exhausted or when local Apple tooling is required. Every job that must avoid minutes needs `runs-on: [self-hosted, macOS]` or a more specific self-hosted label; one leftover `macos-*` job still consumes/bills minutes.
 - Use a self-hosted local-keychain runner only as a fallback when match cannot be seeded yet.
 - If working in the user's AM Software apps, inspect an already-working app first, especially `VideoMerger`, and mirror its signing/CI shape where applicable.
 - Do not declare success from a local upload alone. Verify the remote GitHub Actions run and App Store Connect build state.
@@ -118,7 +119,7 @@ asc apps list --bundle-id "$BUNDLE_ID" --output json
    ```ruby
    git_url("https://github.com/OWNER/MATCH_REPO.git")
    storage_mode("git")
-   type("development")
+   type("appstore")
    app_identifier(["com.example.app"])
    username("apple-id@example.com")
    ```
@@ -139,6 +140,14 @@ asc apps list --bundle-id "$BUNDLE_ID" --output json
        issuer_id: issuer_id,
        key_filepath: key_path
      )
+     ENV.delete("APP_STORE_CONNECT_API_KEY_PATH")
+     ENV.delete("DELIVER_API_KEY_PATH")
+   end
+
+   def match_readonly?
+     override = ENV["MATCH_READONLY_OVERRIDE"]
+     return override.downcase == "true" if override
+     !ENV["CI"]
    end
 
    def match_keychain_options
@@ -151,13 +160,13 @@ asc apps list --bundle-id "$BUNDLE_ID" --output json
    platform :ios do
      lane :certificates do
        ensure_app_store_connect_api_key!
-       match(type: "appstore", api_key: @app_store_api_key, **match_keychain_options)
+       match(type: "appstore", readonly: match_readonly?, api_key: @app_store_api_key, **match_keychain_options)
      end
 
-     lane :deploy_testflight do
+     lane :build_release do
        ensure_app_store_connect_api_key!
        increment_build_number(build_number: ENV["GITHUB_RUN_NUMBER"] || Time.now.utc.strftime("%Y%m%d%H%M%S"))
-       match(type: "appstore", api_key: @app_store_api_key, **match_keychain_options)
+       match(type: "appstore", readonly: match_readonly?, api_key: @app_store_api_key, **match_keychain_options)
        gym(
          scheme: "App",
          configuration: "Release",
@@ -168,10 +177,33 @@ asc apps list --bundle-id "$BUNDLE_ID" --output json
            }
          }
        )
+     end
+
+     lane :deploy_testflight do
+       build_release
        pilot(api_key: @app_store_api_key, skip_waiting_for_build_processing: true)
+     end
+
+     lane :submit_to_app_store do
+       build_release
+       ENV.delete("APP_STORE_CONNECT_API_KEY_PATH")
+       ENV.delete("DELIVER_API_KEY_PATH")
+       upload_to_app_store(
+         api_key: @app_store_api_key,
+         force: true,
+         skip_metadata: true,
+         skip_screenshots: true,
+         submit_for_review: false,
+         automatic_release: false,
+         precheck_include_in_app_purchases: false
+       )
      end
    end
    ```
+
+   If passing `api_key:` to `pilot`, `deliver`, or `upload_to_app_store`, clear `APP_STORE_CONNECT_API_KEY_PATH` and `DELIVER_API_KEY_PATH` after creating the API key object. Otherwise Fastlane can see both `api_key` and `api_key_path` and fail with conflicting authentication inputs.
+
+   Do not set `reject_if_possible` by default in an App Store upload lane. It can cancel an in-progress App Store review when all the user asked for is uploading a new build.
 
 5. **Seed match**
 
@@ -181,6 +213,8 @@ asc apps list --bundle-id "$BUNDLE_ID" --output json
 
    - `MATCH_PASSWORD` is the encryption password for the match repo.
    - The P12 password is only for importing/exporting the certificate.
+   - Do not copy encrypted cert files from one match repo into another unless you know both repos use the same `MATCH_PASSWORD`. GitHub secrets cannot be read back, and a wrong password will fail before signing with `Invalid password passed via 'MATCH_PASSWORD'`.
+   - When a distribution certificate limit is reached, set match read-only and import/reuse a valid existing distribution cert/profile, or get explicit approval to revoke/free a slot. Do not let CI repeatedly try to create new distribution certs.
    - In a match repo, certificate files should be named by the Developer Portal certificate id, not a local keychain SHA/fingerprint.
    - If fastlane says `Certificate '<hash>' (stored in your storage) is not available on the Developer Portal`, the match repo probably has wrongly named cert files or stale certs.
 
@@ -272,6 +306,7 @@ asc apps list --bundle-id "$BUNDLE_ID" --output json
          RUBY_VERSION: '3.1.4'
          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
          MATCH_GIT_BASIC_AUTHORIZATION: ${{ secrets.MATCH_GIT_BASIC_AUTHORIZATION }}
+         MATCH_READONLY_OVERRIDE: ${{ vars.MATCH_READONLY_OVERRIDE || 'true' }}
          APP_STORE_CONNECT_API_KEY_PATH: ${{ github.workspace }}/fastlane/AuthKey.p8
          APP_STORE_CONNECT_API_KEY_ID: ${{ secrets.APP_STORE_CONNECT_API_KEY_ID }}
          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
@@ -410,6 +445,43 @@ asc apps list --bundle-id "$BUNDLE_ID" --output json
    - Add `security list-keychains -d user -s "$KEYCHAIN" ...` and `security unlock-keychain`.
    - Treat this as temporary until match-backed hosted CI works.
 
+10. **Self-hosted minute-saving runner pattern**
+
+   For private repos with no Actions minutes left, run the complete deploy job on a self-hosted Mac runner. Repo-specific runners are fine; verify the runner is online before chasing workflow bugs:
+
+   ```bash
+   gh api repos/OWNER/APP_REPO/actions/runners \
+     --jq '.runners[] | {name,status,busy,labels:[.labels[].name]}'
+   ```
+
+   Practical workflow hardening for this Mac:
+
+   - Add a cross-repo signing lock, for example `/tmp/akmarinov-ci-signing.lock`, so multiple App Store jobs do not mutate keychains/profiles concurrently.
+   - Use a temporary keychain per run, save original keychain search list, and restore/delete in `if: always()` cleanup.
+   - If replacing `ruby/setup-ruby`, validate Ruby with `ruby -rsocket -e 'exit'`; failed local Ruby builds can miss the `socket` extension.
+   - If reusing another runner's Ruby toolcache, require both `bin/ruby` and the sibling `.complete` marker before symlinking. Without `.complete`, setup can race an incomplete install.
+   - If `actionlint` is unavailable, still parse workflow YAML with Ruby or Python and run `ruby -c fastlane/Fastfile`.
+
+   Minimal self-hosted Ruby fallback check:
+
+   ```bash
+   if [ -x "$RUBY_DIR/bin/ruby" ] &&
+      [ -f "$RUBY_DIR.complete" ] &&
+      "$RUBY_DIR/bin/ruby" -rsocket -e 'exit' >/dev/null 2>&1; then
+     echo "$RUBY_DIR/bin" >> "$GITHUB_PATH"
+   fi
+   ```
+
+11. **App Store upload on main**
+
+   When the desired behavior is "upload to App Store Connect on every push to `main`", make that path explicit:
+
+   - Trigger on `push.branches: [main]`.
+   - Run the App Store upload lane from the push path.
+   - Keep TestFlight lanes available for manual dispatch if needed.
+   - Use `submit_for_review: false` and `automatic_release: false` unless the user explicitly wants automatic review submission/release.
+   - If App Store Connect rejects an upload because a marketing version was already used, bump `MARKETING_VERSION`; incrementing only the build number is not enough for a version that has already shipped.
+
 ## Verification
 
 Remote GitHub Actions verification:
@@ -446,8 +518,12 @@ Success means:
 
 - `curl`/Spaceship `401` in a custom preflight: remove brittle App Store network preflight and let fastlane validate the API key.
 - GitHub match repo `400`: reset `MATCH_GIT_BASIC_AUTHORIZATION`; ensure no trailing `%` and use `Authorization: Basic <base64>`.
+- `Invalid password passed via 'MATCH_PASSWORD'`: the match repo is encrypted with a different password than the app repo secret. You cannot recover the secret from GitHub; align the secret or import assets with the app repo's intended match password.
+- Apple distribution certificate limit reached: do not keep retrying mutable `match`; use read-only signing with existing assets, import an existing cert/profile, or ask before revoking/freeing a certificate slot.
 - `Certificate '<hash>' is not available on the Developer Portal`: match repo has stale/wrong certificate filenames; ensure cert files are named by portal cert id.
 - `No profiles for '<bundle id>' were found` and it asks for development profiles: Release target signing is still Automatic/development; set Release to manual App Store profile.
 - Upload rejected for old SDK: use `macos-26` and Xcode 26+.
+- Upload rejected because version already exists: bump `MARKETING_VERSION` in the Xcode project or XcodeGen config, then rerun.
+- Fastlane says both `api_key` and `api_key_path` are present: clear `APP_STORE_CONNECT_API_KEY_PATH` and `DELIVER_API_KEY_PATH` before calling `deliver`/`upload_to_app_store` with `api_key:`.
 - `errSecInternalComponent` on self-hosted runner: private-key access is blocked; use interactive runner or switch to match.
 - Compliance warning for encryption: add `ITSAppUsesNonExemptEncryption=false` to the app `Info.plist` when true for the app.
