@@ -1,6 +1,6 @@
 ---
 name: ios-code-coverage-setup
-description: Set up or repair iOS code coverage reporting in CI. Use when a Swift/Xcode project needs PR coverage comments, xcov/scan coverage artifacts, Codemagic PR-required coverage checks, a README coverage badge, GitHub Pages badge hosting, shared Fastlane coverage lanes, or fixes for protected-branch badge publishing failures.
+description: Set up or repair iOS code coverage reporting in CI. Use when a Swift/Xcode project needs PR coverage comments, xcov/xccov/scan coverage artifacts, Codemagic PR-required coverage checks, a README coverage badge, GitHub Pages badge hosting, shared Fastlane coverage lanes, or fixes for protected-branch badge publishing failures.
 ---
 
 # iOS Code Coverage Setup
@@ -11,6 +11,7 @@ description: Set up or repair iOS code coverage reporting in CI. Use when a Swif
    - `codemagic.yaml`, `.github/workflows/*`, or other CI config.
    - `fastlane/Fastfile`, `Gemfile`, `Package.resolved`, and test scheme settings.
    - README badge URLs and any existing `coverage-badge` branch or GitHub Pages setup.
+   - For failed builds, inspect the exact failed step logs before choosing a fix.
 
 2. Prefer shared lanes when the project already uses or should use common iOS CI lanes. In Fastlane, import the shared lane repo and call shared coverage lanes from CI rather than copying large lane bodies into app repos.
 

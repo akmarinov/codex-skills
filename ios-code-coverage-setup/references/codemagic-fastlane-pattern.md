@@ -27,7 +27,7 @@ end
 Expected shared lanes:
 
 - `ci_pr_required`: run tests through `scan`.
-- `ci_coverage_report`: consume the generated `.xcresult`, run `xcov`, write artifacts, and upsert a PR coverage comment.
+- `ci_coverage_report`: consume the generated `.xcresult`, write coverage artifacts, and upsert a PR coverage comment.
 - `ci_publish_coverage_badge`: publish badge JSON/SVG artifacts to a badge branch.
 
 When tests and coverage are separate commands, keep coverage enabled in the test command:
@@ -84,6 +84,75 @@ workflows:
 Adjust branch names for repos that use `main`, `master`, or `development`.
 
 The `only_branch` guard is required. PR builds should generate reports/comments, but only the integration branch should update the shared badge branch.
+
+## Separate Coverage Step Repairs
+
+When tests and coverage run in separate Codemagic steps, the coverage lane does not automatically inherit Fastlane `scan` lane context. If `xcov` fails with `Multiple schemes found` or cannot find a shared scheme even though tests passed, make the coverage lane consume the exact result bundle produced by `scan`.
+
+Robust discovery order:
+
+1. Use `SharedValues::SCAN_GENERATED_XCRESULT_PATH` when tests and coverage run in the same Fastlane lane.
+2. Otherwise check the scheme-specific scan output path: `fastlane/test_output/<scheme>.xcresult`.
+3. Only then check the configured derived data test logs: `<derived_data>/Logs/Test/*.xcresult`.
+
+Resolve relative paths against the repository root (`File.expand_path('..', __dir__)` from `fastlane/Fastfile`). Do not scan broad locations like `build/**/*.xcresult` and pick the newest result; that can select a stale or unrelated bundle from another scheme.
+
+For Xcode versions where `xcov-core` fails with `IDEFoundation could not be loaded`, generate the CI artifacts directly with Apple `xccov` from the `.xcresult`:
+
+```ruby
+def generate_ci_xccov_report!(xcresult_path)
+  require 'fileutils'
+  require 'json'
+
+  output_dir = File.join('fastlane', 'xcov_report')
+  FileUtils.mkdir_p(output_dir)
+
+  report_json = sh(
+    "xcrun xccov view --report --json #{Shellwords.escape(xcresult_path)}",
+    log: false
+  )
+  report = JSON.parse(report_json)
+  targets = Array(report['targets'])
+
+  included_targets = APP_COVERAGE_TGT.to_s.split(',').map(&:strip).reject(&:empty?)
+  selected_targets = if included_targets.empty?
+                       targets
+                     else
+                       targets.select do |target|
+                         name = target['name'].to_s
+                         normalized_name = name.sub(/\.app\z/, '')
+                         included_targets.any? { |included| included == name || included.sub(/\.app\z/, '') == normalized_name }
+                       end
+                     end
+  selected_targets = targets if selected_targets.empty?
+
+  executable_lines = selected_targets.sum { |target| target['executableLines'].to_i }
+  covered_lines = selected_targets.sum { |target| target['coveredLines'].to_i }
+  coverage = executable_lines.positive? ? covered_lines.to_f / executable_lines : 0.0
+
+  report['selectedTargets'] = selected_targets.map { |target| target['name'] }
+  report['selectedLineCoverage'] = coverage
+  File.write(File.join(output_dir, 'report.json'), JSON.pretty_generate(report))
+
+  markdown = [
+    "Code coverage: #{format('%.2f%%', coverage * 100)}",
+    '',
+    '| Target | Coverage | Covered Lines | Executable Lines |',
+    '| --- | ---: | ---: | ---: |'
+  ]
+  selected_targets.each do |target|
+    markdown << [
+      target['name'],
+      format('%.2f%%', target['lineCoverage'].to_f * 100),
+      target['coveredLines'].to_i,
+      target['executableLines'].to_i
+    ].join(' | ').prepend('| ').concat(' |')
+  end
+  File.write(File.join(output_dir, 'report.md'), "#{markdown.join("\n")}\n")
+end
+```
+
+Keep the old `xcov` path as a fallback when no `.xcresult` can be found, but prefer `xccov` for CI result-bundle parsing on newer Xcode images. The PR comment flow can continue to read `fastlane/xcov_report/report.md`, and Codemagic artifacts can continue to publish `fastlane/xcov_report/*`.
 
 ## PR-Only Steps
 
