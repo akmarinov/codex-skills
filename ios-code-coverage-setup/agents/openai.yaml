@@ -1,0 +1,4 @@
+interface:
+  display_name: "iOS Code Coverage Setup"
+  short_description: "Set up iOS CI coverage reports and badges"
+  default_prompt: "Use $ios-code-coverage-setup to add PR coverage comments and a README coverage badge to this iOS project."
